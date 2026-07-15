@@ -19,9 +19,14 @@ import path from 'node:path';
 
 const run = promisify(execFile);
 
-// Retry schedule (ms). Greylist windows are typically 1–15 min.
-const RETRIES = [0, 5 * 60_000, 15 * 60_000, 45 * 60_000];
+// Retry schedule (ms). Greylist windows are typically 1–15 min; a handful of tries is enough.
+const RETRIES = [0, 5 * 60_000, 15 * 60_000];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Per-subject cooldown so repeated triggers can't stack many SMTP retry loops (avoids being
+// flagged as an abusive sender). Same alert subject won't resend within this window.
+const ALERT_COOLDOWN_MS = 60 * 60_000;
+const lastAlert = new Map();
 
 async function resolveMx(domain) {
   const { stdout } = await run('dig', ['+short', 'MX', domain]);
@@ -63,6 +68,9 @@ async function attempt(mx, from, to, subject, body) {
 // Fire-and-forget with greylist retries. Resolves true if some attempt was accepted.
 export async function sendAlert(cfg, subject, body) {
   if (!cfg.alertEmail) return false;
+  const prev = lastAlert.get(subject) || 0;
+  if (Date.now() - prev < ALERT_COOLDOWN_MS) { console.log('alert suppressed (cooldown):', subject); return false; }
+  lastAlert.set(subject, Date.now());
   try {
     const to = cfg.alertEmail;
     const mx = await resolveMx(to.split('@')[1]);
