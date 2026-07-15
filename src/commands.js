@@ -62,6 +62,7 @@ handled separately — if you run several, I'll ask which one(s) each action is 
 *Commands* (DM me):
 /policy               set a group's policy
 /grace <hours>        strict-policy grace window before removal (per group)
+/welcome on|off       post a welcome when someone joins (per group, on by default)
 /allow add|remove <uniqname> | list | enforce on|off   per-group approved uniqnames
 /allow bulk           paste a whole roster of uniqnames to auto-approve
 /associate <phone> <uniqname>   bind a uniqname to a number + verify them
@@ -181,6 +182,12 @@ export async function handleDM(sock, db, cfg, senderPhone, rawText, senderLid = 
       const h = parseInt(tk[1], 10);
       if (!Number.isInteger(h) || h < 1 || h > 720) return (await send(sock, senderPhone, 'Usage: /grace <hours 1-720> (strict-policy grace window)'), true);
       return startScoped(sock, db, senderPhone, groups, { cmd: 'grace', hours: h });
+    }
+    case '/welcome': {
+      if (!isAdmin) return notAdmin();
+      const v = oneOf(tk[1], ['on', 'off']);
+      if (!v) return (await send(sock, senderPhone, 'Usage: /welcome on|off (post a welcome when someone joins)'), true);
+      return startScoped(sock, db, senderPhone, groups, { cmd: 'welcome', value: v });
     }
     case '/notif':
       return isAdmin ? startScoped(sock, db, senderPhone, groups, { cmd: 'notif' }) : notAdmin();
@@ -313,6 +320,7 @@ function scopedVerb(p) {
   if (p.cmd === 'stats') return `Show ${p.period} stats for`;
   if (p.cmd === 'membercount') return `Member count${p.date ? ` on ${p.date}` : ''} for`;
   if (p.cmd === 'grace') return `Set strict grace to ${p.hours}h for`;
+  if (p.cmd === 'welcome') return `Turn join welcomes ${p.value} for`;
   if (p.cmd === 'associate') return `Associate ${p.target} ↔ ${p.uniqname} (verify) in`;
   if (p.cmd === 'allow') return `Apply /allow ${p.sub}${p.uniqname ? ' ' + p.uniqname : p.value ? ' ' + p.value : ''} to`;
   return `Apply /${p.cmd} to`;
@@ -453,6 +461,11 @@ async function execute(sock, db, phone, p, gids) {
   if (p.cmd === 'grace') {
     for (const gid of ok) { db.prepare('UPDATE groups SET grace_hours=? WHERE gid=?').run(p.hours, gid); logAction(db, { gid, actor: phone, action: 'setting', target: '', reason: `grace=${p.hours}h` }); }
     return send(sock, phone, `Strict grace period set to ${p.hours}h for ${ok.length} group(s).`);
+  }
+  if (p.cmd === 'welcome') {
+    const on = p.value === 'on' ? 1 : 0;
+    for (const gid of ok) { db.prepare('UPDATE groups SET welcome=? WHERE gid=?').run(on, gid); logAction(db, { gid, actor: phone, action: 'setting', target: '', reason: `welcome=${on}` }); }
+    return send(sock, phone, `Join welcomes ${p.value} for ${ok.length} group(s).`);
   }
   if (p.cmd === 'membercount') {
     const countFor = (g) => p.date ? memberCountAt(db, g, p.date)

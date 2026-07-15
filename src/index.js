@@ -83,6 +83,8 @@ function textOf(msg) {
 const groupPolicy = (gid) => db.prepare('SELECT policy FROM groups WHERE gid=?').get(gid)?.policy || cfg.defaultPolicy;
 // Per-group strict grace window (hours); falls back to the config default when unset.
 const groupGrace = (gid) => db.prepare('SELECT grace_hours FROM groups WHERE gid=?').get(gid)?.grace_hours ?? cfg.graceHours;
+// Per-group welcome toggle (default on). Disabled per group with /welcome off.
+const groupWelcome = (gid) => (db.prepare('SELECT welcome FROM groups WHERE gid=?').get(gid)?.welcome ?? 1) === 1;
 const groupName = (gid) => db.prepare('SELECT name FROM groups WHERE gid=?').get(gid)?.name || gid;
 const verifiedHere = (gid, phone) => !!db.prepare('SELECT 1 FROM membership WHERE gid=? AND phone=? AND verified=1').get(gid, phone);
 // Trusted = verified OR grandfathered (already in the group when the bot arrived). Trusted
@@ -199,14 +201,35 @@ async function onJoin(sock, gid, lid, phone) {
   const policy = groupPolicy(gid);
   await notifyAdmins(sock, db, gid, 'flag', `verify requested from ${phone || key} (policy=${policy})`);
 
-  // Auto-welcome is OPT-IN. When on, joiners are BATCHED into one editable message per group
-  // (no per-joiner posts, no per-joiner DMs) so a busy group can't trigger a spam-flag.
-  if (!cfg.welcomeOnJoin) return;
+  // Welcome (per-group toggle, default on). Joiners are BATCHED into one editable message per
+  // group and all sends are paced by the outbox, so a burst of joiners can't fire many messages
+  // at once (the pattern that trips WhatsApp anti-spam).
+  if (!groupWelcome(gid)) return;
   const extra = policy === 'hold' ? ' Until you do, your messages here are removed.'
               : policy === 'strict' ? ` You have ${groupGrace(gid)}h or you'll be removed.` : '';
   const mentions = [...new Set([phone ? `${phone}@s.whatsapp.net` : null, `${key}@lid`].filter(Boolean))];
   const tag = phone ? `@${phone}` : `@${key}`;
   await postWelcome(sock, gid, tag, mentions, extra);
+}
+
+// Welcome queue: drop 'gid|memberLid|phone' lines into ./welcome_queue to (re)post a welcome for
+// a specific member — used to send a welcome that was missed while the flag was off / bot offline.
+const WELCOME_QUEUE = './welcome_queue';
+async function processWelcomeQueue(sock) {
+  if (!existsSync(WELCOME_QUEUE)) return;
+  let lines;
+  try { lines = readFileSync(WELCOME_QUEUE, 'utf8').split('\n').map((s) => s.trim()).filter(Boolean); } catch { return; }
+  if (!lines.length) return;
+  try { writeFileSync(WELCOME_QUEUE, ''); } catch {}
+  for (const line of lines) {
+    const [gid, key, phone] = line.split('|');
+    if (!gid || !key) continue;
+    const policy = groupPolicy(gid);
+    const extra = policy === 'hold' ? ' Until you do, your messages here are removed.'
+                : policy === 'strict' ? ` You have ${groupGrace(gid)}h or you'll be removed.` : '';
+    const mentions = [...new Set([phone ? `${phone}@s.whatsapp.net` : null, `${key}@lid`].filter(Boolean))];
+    await postWelcome(sock, gid, phone ? `@${phone}` : `@${key}`, mentions, extra);
+  }
 }
 
 // strict-policy grace kick: remove members unverified IN THAT GROUP past graceHours. NOT a ban.
@@ -312,7 +335,7 @@ async function start() {
       const n = await syncAllGroups(sock);
       console.log('connected. groups:', n);
       if (!watchdogTimer) watchdogTimer = setInterval(watchdog, 5 * 60 * 1000);
-      if (!joinTimer) joinTimer = setInterval(() => { processJoinQueue(currentSock).catch(() => {}); }, 5000);
+      if (!joinTimer) joinTimer = setInterval(() => { processJoinQueue(currentSock).catch(() => {}); processWelcomeQueue(currentSock).catch(() => {}); }, 5000);
       if (!sweepTimer) sweepTimer = setInterval(() => {
         graceSweep(currentSock).catch(() => {});
         try { pruneArchive(db); } catch {}

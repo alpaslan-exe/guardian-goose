@@ -33,7 +33,8 @@ export function openDb(path) {
       policy           TEXT DEFAULT 'chill', -- 'chill' | 'hold' | 'strict' | 'off' (PER GROUP)
       enforce_allowlist INTEGER DEFAULT 0,   -- PER GROUP: require uniqname on this group's allowlist
       member_count     INTEGER DEFAULT 0,    -- current participant count, refreshed on each sync
-      grace_hours      INTEGER               -- PER GROUP strict grace window; NULL = use config default
+      grace_hours      INTEGER,              -- PER GROUP strict grace window; NULL = use config default
+      welcome          INTEGER DEFAULT 1     -- PER GROUP: post a welcome on join (1=on, 0=off)
     );
 
     -- Daily snapshot of each group's total member count (baseline stats + /membercount at a point
@@ -164,5 +165,6 @@ export function openDb(path) {
   try { db.exec('ALTER TABLE membership ADD COLUMN pretrusted INTEGER DEFAULT 0'); } catch {}
   try { db.exec('ALTER TABLE groups ADD COLUMN member_count INTEGER DEFAULT 0'); } catch {}
   try { db.exec('ALTER TABLE groups ADD COLUMN grace_hours INTEGER'); } catch {}
+  try { db.exec('ALTER TABLE groups ADD COLUMN welcome INTEGER DEFAULT 1'); } catch {}
   return db;
 }

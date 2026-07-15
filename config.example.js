@@ -23,12 +23,10 @@ export default {
   // strict policy: hours a new joiner has to verify (DM uniqname) before kick
   graceHours: 24,
 
-  // On join, post a welcome in the group and try to DM the new member. OFF by default:
-  // on a busy group this mass-messages and looks like spam. When off, joiners are tracked
-  // and (under hold) muted, admins are flagged, and verification happens member-initiated
-  // (they DM the bot) or via /allow bulk rosters and /associate.
-  welcomeOnJoin: false,
-  // Even when welcomeOnJoin is on, never post more than this many welcomes per group per hour.
+  // Join welcomes are per-group (default ON, toggle with /welcome on|off). Joiners are batched
+  // into one editable message per group and every send is paced by the outbox, so a burst of
+  // joiners edits a single message rather than firing many at once. Members can't be cold-DM'd
+  // (WhatsApp 463); they DM the bot to verify. This caps NEW welcome posts per group per hour:
   welcomeMaxPerHour: 6,
 
   // Allowlist enforcement is PER GROUP (not global): an admin turns it on for a
