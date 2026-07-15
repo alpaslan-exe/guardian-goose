@@ -43,6 +43,14 @@ const clearSession = (db, phone) => db.prepare('DELETE FROM dm_session WHERE pho
 // Candidate groups from cache; authz is RE-VERIFIED live before any action executes.
 // Superadmins get EVERY group the bot knows about. Regular admins are matched by phone OR
 // their LID (admin_group stores whatever id groupMetadata returned — now LIDs).
+// All ids linked to a given id, across the phone<->lid map (a member may be keyed by either).
+const relatedIds = (db, id) => {
+  const s = new Set([id]);
+  const l = db.prepare('SELECT lid FROM lidmap WHERE phone=?').get(id); if (l) s.add(l.lid);
+  const p = db.prepare('SELECT phone FROM lidmap WHERE lid=?').get(id); if (p) s.add(p.phone);
+  return [...s];
+};
+
 const adminGroups = (db, phone, lid) =>
   isSuper(phone)
     ? db.prepare('SELECT gid, name, policy, enforce_allowlist FROM groups ORDER BY name').all()
@@ -226,18 +234,10 @@ export async function handleDM(sock, db, cfg, senderPhone, rawText, senderLid = 
       const ph = normalizePhone(q, cfg.homeCountryCode);
       const digits = q.replace(/\D/g, '');
 
-      // All ids linked to a given id, across the phone<->lid map.
-      const relatedIds = (id) => {
-        const s = new Set([id]);
-        const l = db.prepare('SELECT lid FROM lidmap WHERE phone=?').get(id); if (l) s.add(l.lid);
-        const p = db.prepare('SELECT phone FROM lidmap WHERE lid=?').get(id); if (p) s.add(p.phone);
-        return [...s];
-      };
-
       // Seed candidate ids from every interpretation of the query.
       const seeds = new Set();
-      if (ph) relatedIds(ph).forEach((x) => seeds.add(x));
-      if (digits) relatedIds(digits).forEach((x) => seeds.add(x));
+      if (ph) relatedIds(db, ph).forEach((x) => seeds.add(x));
+      if (digits) relatedIds(db, digits).forEach((x) => seeds.add(x));
 
       // Collect distinct identities (members table + membership table) — MULTI-INDEX find.
       const ids = new Set();
@@ -255,7 +255,7 @@ export async function handleDM(sock, db, cfg, senderPhone, rawText, senderLid = 
       // (prefer the real phone). Prevents duplicate rows for a member found by both phone & lid.
       const list = [], seen = new Set();
       for (const id of ids) {
-        const rel = relatedIds(id);
+        const rel = relatedIds(db, id);
         if (rel.some((r) => seen.has(r))) continue;
         rel.forEach((r) => seen.add(r));
         const m = db.prepare(`SELECT phone FROM members WHERE phone IN (${rel.map(() => '?').join(',')})`).all(...rel)[0];
@@ -263,7 +263,7 @@ export async function handleDM(sock, db, cfg, senderPhone, rawText, senderLid = 
       }
 
       const fmt = (id) => {
-        const rel = relatedIds(id);
+        const rel = relatedIds(db, id);
         const m = db.prepare(`SELECT * FROM members WHERE phone IN (${rel.map(() => '?').join(',')})`).all(...rel)[0];
         const lid = db.prepare('SELECT lid FROM lidmap WHERE phone=?').get(m?.phone || id)?.lid;
         const mem = db.prepare(`SELECT gid,verified FROM membership WHERE phone IN (${rel.map(() => '?').join(',')})`).all(...rel);
@@ -486,9 +486,10 @@ async function execute(sock, db, phone, p, gids) {
     return;
   }
   if (p.cmd === 'messages') {
+    const ids = relatedIds(db, p.target); // archive is keyed by phone OR lid — fetch both
     const out = [];
     for (const gid of ok) {
-      const rows = fetchArchive(db, gid, p.target);
+      const rows = ids.flatMap((id) => fetchArchive(db, gid, id)).sort((a, b) => b.ts - a.ts);
       out.push(`*${nameOf(db, gid)}* (${rows.length}):`);
       out.push(rows.length ? rows.map((r) => `• ${fmtTs(r.ts)} ${r.body || '(no text)'}`).join('\n') : '  (none archived)');
     }
