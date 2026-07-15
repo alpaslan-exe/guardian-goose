@@ -1,0 +1,19 @@
+[Unit]
+Description=WhatsApp Anti-Spam Group Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/antispam
+# __NODE__ is replaced by deploy.sh with the nvm Node 22 binary path.
+ExecStart=__NODE__ src/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=TZ=America/Detroit
+StandardOutput=append:/var/log/antispam.log
+StandardError=append:/var/log/antispam.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+node_modules/
+auth_state/
+*.db
+*.db-*
+config.js
+.env
+join_queue
+dm_probe
+.last_connected
+*.log
