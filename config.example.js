@@ -76,6 +76,12 @@ export default {
   alertEmail: '',
   alertTopic: 'antispam-bot-alert',
 
+  // Outbound message pacing (WhatsApp ToS safety). Every send is serialized through a queue
+  // with a randomized gap so the bot never bursts. Deletes, replies, notifications — all paced.
+  sendMinGapMs: 2500,   // minimum gap between any two sends
+  sendJitterMs: 2500,   // extra random 0..N ms added to each gap (human-like)
+  sendDailyCap: 500,    // hard ceiling on sends per rolling 24h (backstop against runaway)
+
   dbPath: './antispam.db',
   authDir: './auth_state',
 };

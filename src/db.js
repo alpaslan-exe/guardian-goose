@@ -55,6 +55,14 @@ export function openDb(path) {
       PRIMARY KEY (gid, phone)
     );
 
+    -- Ids (phone or LID) that have messaged the bot first, so it may safely reply. WhatsApp
+    -- blocks messaging strangers who never contacted the bot (error 463) — notifications are
+    -- only sent to ids listed here (plus configured superadmins).
+    CREATE TABLE IF NOT EXISTS contacted (
+      id TEXT PRIMARY KEY,
+      ts INTEGER
+    );
+
     -- WhatsApp LID <-> phone mapping (WhatsApp now addresses users by privacy LID).
     -- Learned from inbound message keys (remoteJidAlt/participantPn). Used to address
     -- outbound messages to the correct @lid so replies aren't rejected (error 463).

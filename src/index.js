@@ -21,8 +21,9 @@ import { openDb } from './db.js';
 import { screen, uniqnameAllowedInGroup, tryAutoAdmit } from './screening.js';
 import { inspect } from './behavior.js';
 import { handleDM, setSession, clearSession, ADMIN_WELCOME } from './commands.js';
-import { removeMember, logAction, isBanned, pruneArchive, autoBansLast24hInGroup, isAdminLive, recordLid, addrFor, addrForId, jid2phone } from './actions.js';
+import { removeMember, logAction, isBanned, pruneArchive, autoBansLast24hInGroup, isAdminLive, recordLid, recordContact, isContacted, addrFor, addrForId, jid2phone } from './actions.js';
 import { normalizePhone } from './security.js';
+import { installOutbox } from './outbox.js';
 
 const AUTO_BAN_CAP = 10; // max bot-initiated bans per group per 24h; beyond -> flag only
 // Start of "today" in the process timezone (systemd sets TZ=America/Detroit) — DST-correct.
@@ -110,7 +111,8 @@ async function syncGroup(sock, gid) {
   return { isNew: !existed, newAdmins };
 }
 
-const welcomeAdmin = (sock, phone, gid) => sock.sendMessage(addrForId(db, phone), { text: ADMIN_WELCOME(groupName(gid)) }).catch(() => {});
+// Only message an admin who has contacted the bot before (never cold-DM -> WhatsApp 463 / ban risk).
+const welcomeAdmin = (sock, phone, gid) => isContacted(db, phone) ? sock.sendMessage(addrForId(db, phone), { text: ADMIN_WELCOME(groupName(gid)) }).catch(() => {}) : Promise.resolve();
 
 // New-group announcement. NEVER blast every detected admin (Community admins bleed into
 // linked-group admin lists → spam flag + wrong targets). Superadmin gets a short notice;
@@ -118,11 +120,12 @@ const welcomeAdmin = (sock, phone, gid) => sock.sendMessage(addrForId(db, phone)
 async function announceNewGroup(sock, gid, detectedAdmins) {
   const supers = (cfg.superadmins || []).map(String);
   for (const s of supers)
-    await sock.sendMessage(addrFor(db, s), { text: `🪿 Guardian Goose joined *${groupName(gid)}* (${detectedAdmins.length} admins detected). Promote me to admin to enable moderation. DM /help to manage.` }).catch(() => {});
+    if (isContacted(db, s)) // only if the operator has DMed the bot (never cold-DM)
+      await sock.sendMessage(addrFor(db, s), { text: `🪿 Guardian Goose joined *${groupName(gid)}* (${detectedAdmins.length} admins detected). Promote me to admin to enable moderation. DM /help to manage.` }).catch(() => {});
   if (cfg.welcomeGroupAdmins)
     for (const a of detectedAdmins) if (!supers.includes(a)) await welcomeAdmin(sock, a, gid);
 }
-const goodbyeAdmin = (sock, phone, gid) => sock.sendMessage(addrForId(db, phone), { text: `You were removed as admin of ${groupName(gid)}. I'll no longer accept admin commands from you for that group.` }).catch(() => {});
+const goodbyeAdmin = (sock, phone, gid) => isContacted(db, phone) ? sock.sendMessage(addrForId(db, phone), { text: `You were removed as admin of ${groupName(gid)}. I'll no longer accept admin commands from you for that group.` }).catch(() => {}) : Promise.resolve();
 
 const welcomeTimes = new Map();   // gid -> timestamps (ms) of NEW welcome posts in the trailing hour
 const welcomeBatch = new Map();   // gid -> { key, entries:[{tag,mentions}], ts } active editable batch
@@ -258,6 +261,7 @@ async function start() {
   const agent = await buildAgent(cfg.proxyUrl).catch((e) => { console.error('proxy agent failed:', e.message); return undefined; });
   if (agent) console.log('using proxy for WhatsApp connection');
   const sock = makeWASocket({ auth: state, logger: log, printQRInTerminal: false, browser: Browsers.ubuntu('Chrome'), agent, fetchAgent: agent });
+  installOutbox(sock, { minGapMs: cfg.sendMinGapMs, jitterMs: cfg.sendJitterMs, dailyCap: cfg.sendDailyCap }); // pace ALL sends
   currentSock = sock;
   sock.ev.on('creds.update', saveCreds);
 
@@ -377,7 +381,12 @@ async function start() {
       if (altPhone && senderLid) recordLid(db, altPhone, senderLid);
       const phone = isGroup ? (senderLid || jid2phone(senderId)) : (altPhone || jid2phone(senderId));
 
-      if (!isGroup) { await handleDM(sock, db, cfg, phone, body, senderLid); continue; }
+      if (!isGroup) {
+        // A DM to the bot establishes contact, so it may reply / notify this id later.
+        recordContact(db, phone); recordContact(db, senderLid);
+        await handleDM(sock, db, cfg, phone, body, senderLid);
+        continue;
+      }
 
       // Group disabled -> bot ignores it entirely (no /ban, no indexing, no screening).
       if (groupPolicy(jid) === 'off') continue;

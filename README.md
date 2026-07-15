@@ -84,8 +84,10 @@ Then add the bot to a group and promote it to **admin**.
 | `voipProvider` | Line-type lookup: `libphonenumber` (offline, free) or a paid provider. |
 | `defaultPolicy` | Policy assigned to a newly-seen group. |
 | `graceHours` | Hours a `strict` joiner has to verify before removal. |
-| `welcomeOnJoin` | Post a welcome / DM new members on join (off by default). |
-| `welcomeMaxPerHour` | Per-group cap on welcome messages when the above is on. |
+| `welcomeOnJoin` | Post a welcome to new members on join (off by default; batched + edited). |
+| `welcomeMaxPerHour` | Per-group cap on new welcome posts when the above is on. |
+| `sendMinGapMs` / `sendJitterMs` | Pacing between outbound messages (all sends are serialized). |
+| `sendDailyCap` | Hard ceiling on sends per rolling 24h. |
 | `uniqnameRegex` | Validation pattern for a member identifier. |
 | `superadmins` | Operator numbers; act as admin of every group. |
 | `pairNumber` | Bot number for code pairing (leave empty for QR). |

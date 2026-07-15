@@ -23,6 +23,11 @@ export const recordLid = (db, phone, lid) => {
   db.prepare('INSERT INTO lidmap (phone,lid) VALUES (?,?) ON CONFLICT(phone) DO UPDATE SET lid=excluded.lid').run(phone, lid);
 };
 export const lidForPhone = (db, phone) => db.prepare('SELECT lid FROM lidmap WHERE phone=?').get(phone)?.lid || null;
+
+// Mark an id (phone or LID) as safe to message (it contacted the bot first). Both are recorded
+// so a member reachable by either identity is recognised.
+export const recordContact = (db, id) => { if (id) db.prepare('INSERT INTO contacted (id,ts) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET ts=excluded.ts').run(id, now()); };
+export const isContacted = (db, id) => !!(id && db.prepare('SELECT 1 FROM contacted WHERE id=?').get(id));
 // Best address for a PHONE: the @lid if known, else the classic phone jid.
 export const addrFor = (db, phone) => { const l = lidForPhone(db, phone); return l ? `${l}@lid` : `${phone}@s.whatsapp.net`; };
 // Best address for an ID that is already a LID (group participant/admin ids under WhatsApp
