@@ -259,7 +259,10 @@ let currentSock = null; // always the live socket; timers use this, never a stal
 const STAMP = './.last_connected';
 const stampConnected = () => { try { writeFileSync(STAMP, String(Date.now())); } catch {} };
 function watchdog() {
-  if (connected) { downAlerted = false; return; } // currently online -> never alert
+  // While online, refresh the stamp so it always reflects "last healthy moment" — this is what
+  // makes the check measure continuous downtime, not time since the last (re)connect. Without
+  // it, a long-lived socket has a stale stamp and a brief normal reconnect looks like an outage.
+  if (connected) { stampConnected(); downAlerted = false; return; }
   let last = 0;
   try { last = parseInt(readFileSync(STAMP, 'utf8'), 10) || 0; } catch { return; } // no stamp yet (pairing) -> skip
   if (last && Date.now() - last > 15 * 60 * 1000 && !downAlerted) {
