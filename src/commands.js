@@ -15,6 +15,7 @@ import { removeMember, unbanMember, fetchArchive, logAction, isAdminLive, addrFo
 import { uniqnameAllowedInGroup } from './screening.js';
 import { notifyAdmins } from './notify.js';
 import { clean, tokens, validUniqname, validPhone, normalizePhone, oneOf, extractUniqnames } from './security.js';
+import { resolvePeriod, aggregate, buildCharts, renderChart } from './stats.js';
 
 const MASS_BAN_LIMIT = 10; // bans per admin per 24h before typed approval is required
 
@@ -68,6 +69,8 @@ handled separately — if you run several, I'll ask which one(s) each action is 
 /unban <phone>        lift a ban
 /messages <phone>     fetch a banned user's archived messages (last 45, 30 days)
 /lookup <uniqname|phone|lid>   flexible; finds across all records
+/stats [period]       charts: members, message volume, actions
+                      period: all | ytd | week | month | year | YYYY | YYYY-MM
 /notif                your alert level (all | kicks | none)
 /logs [n]             recent actions
 /help                 show this again
@@ -158,6 +161,11 @@ export async function handleDM(sock, db, cfg, senderPhone, rawText, senderLid = 
         await notifyAdmins(sock, db, p.gid, 'remove', `🪿 Honk! admin ${senderPhone} confirmed ban of ${p.phone}`);
       }
       return (await send(sock, senderPhone, `Confirmed ${done} ban(s).${refused ? ` ${refused} refused (not admin / protected).` : ''}`), true);
+    }
+    case '/stats': {
+      if (!isAdmin) return notAdmin();
+      // period: all | ytd | week | month | year | YYYY | YYYY-MM  (default: last 30 days)
+      return startScoped(sock, db, senderPhone, groups, { cmd: 'stats', period: tk[1] || 'month' });
     }
     case '/policy':
       return isAdmin ? startScoped(sock, db, senderPhone, groups, { cmd: 'policy' }) : notAdmin();
@@ -289,6 +297,7 @@ function scopedVerb(p) {
   if (p.cmd === 'remove') return `BAN ${p.target} from`;
   if (p.cmd === 'unban') return `Unban ${p.target} in`;
   if (p.cmd === 'messages') return `Fetch ${p.target}'s messages from`;
+  if (p.cmd === 'stats') return `Show ${p.period} stats for`;
   if (p.cmd === 'associate') return `Associate ${p.target} ↔ ${p.uniqname} (verify) in`;
   if (p.cmd === 'allow') return `Apply /allow ${p.sub}${p.uniqname ? ' ' + p.uniqname : p.value ? ' ' + p.value : ''} to`;
   return `Apply /${p.cmd} to`;
@@ -425,6 +434,17 @@ async function execute(sock, db, phone, p, gids) {
       logAction(db, { gid, actor: phone, action: 'verify', target: p.target, reason: `associated ${p.uniqname}` });
     }
     return send(sock, phone, `Associated ${p.target} ↔ ${p.uniqname}; verified in ${ok.length} group(s).`);
+  }
+  if (p.cmd === 'stats') {
+    const period = resolvePeriod(p.period);
+    const agg = aggregate(db, ok, period);
+    const title = ok.length === 1 ? nameOf(db, ok[0]) : `${ok.length} groups`;
+    await send(sock, phone, `📊 *${title}* — ${period.label}\njoins ${agg.totals.joins} · leaves ${agg.totals.leaves} · net ${agg.totals.joins - agg.totals.leaves} · messages ${agg.totals.messages} · goose actions ${agg.totals.actions}\nRendering charts…`);
+    for (const chart of buildCharts(agg, title)) {
+      try { const img = await renderChart(chart); await sock.sendMessage(addrFor(DB, phone), { image: img, caption: chart.options.title.text }); }
+      catch (e) { await send(sock, phone, `Chart render failed: ${e.message}`); }
+    }
+    return;
   }
   if (p.cmd === 'messages') {
     const out = [];

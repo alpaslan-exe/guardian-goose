@@ -131,6 +131,7 @@ admin, and ask which group(s) to act on when the admin runs several.
 | `/unban <phone>` | Lift a ban. |
 | `/messages <phone>` | Fetch a banned user's archived messages. |
 | `/lookup <uniqname\|phone\|lid>` | Find a member across all records. |
+| `/stats [period]` | Chart images: membership change, message volume, and actions. Period: `all`, `ytd`, `week`, `month`, `year`, `YYYY`, or `YYYY-MM`. |
 | `/notif` | Set your alert level: `all`, `kicks`, or `none`. |
 | `/logs [n]` | Recent actions in your groups. |
 

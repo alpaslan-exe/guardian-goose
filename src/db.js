@@ -128,6 +128,17 @@ export function openDb(path) {
       ts      INTEGER
     );
 
+    -- Per-group, per-day activity counters feeding the /stats charts. Actions are counted
+    -- from action_log directly, so only membership and message volume are tracked here.
+    CREATE TABLE IF NOT EXISTS daily_stats (
+      gid      TEXT,
+      day      TEXT,                      -- 'YYYY-MM-DD' in the display timezone
+      joins    INTEGER DEFAULT 0,
+      leaves   INTEGER DEFAULT 0,
+      messages INTEGER DEFAULT 0,
+      PRIMARY KEY (gid, day)
+    );
+
     CREATE TABLE IF NOT EXISTS action_log (
       id     INTEGER PRIMARY KEY AUTOINCREMENT,
       ts     INTEGER,

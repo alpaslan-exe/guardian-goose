@@ -24,6 +24,7 @@ import { handleDM, setSession, clearSession, ADMIN_WELCOME } from './commands.js
 import { removeMember, logAction, isBanned, pruneArchive, autoBansLast24hInGroup, isAdminLive, recordLid, recordContact, isContacted, addrFor, addrForId, jid2phone } from './actions.js';
 import { normalizePhone } from './security.js';
 import { installOutbox } from './outbox.js';
+import { bumpStat } from './stats.js';
 
 const AUTO_BAN_CAP = 10; // max bot-initiated bans per group per 24h; beyond -> flag only
 // Start of "today" in the process timezone (systemd sets TZ=America/Detroit) — DST-correct.
@@ -345,6 +346,7 @@ async function start() {
       for (const part of participants) {
         const lid = partLid(part), phone = partPn(part);
         if (!lid || lid === botLid || lid === botPhone || phone === botPhone) continue;
+        bumpStat(db, gid, 'joins');
         await onJoin(sock, gid, lid, phone);
       }
     } else if (action === 'promote') {
@@ -359,7 +361,7 @@ async function start() {
       }
       await syncGroup(sock, gid);
     } else if (action === 'remove') {
-      for (const part of participants) db.prepare('DELETE FROM membership WHERE gid=? AND phone=?').run(gid, partLid(part));
+      for (const part of participants) { db.prepare('DELETE FROM membership WHERE gid=? AND phone=?').run(gid, partLid(part)); bumpStat(db, gid, 'leaves'); }
       await syncGroup(sock, gid);
     }
   });
@@ -398,6 +400,7 @@ async function start() {
       const isFirstMessage = !db.prepare('SELECT 1 FROM msg_index WHERE gid=? AND phone=? LIMIT 1').get(jid, phone);
 
       db.prepare(`INSERT OR IGNORE INTO msg_index (gid,phone,msg_id,body,ts) VALUES (?,?,?,?,?)`).run(jid, phone, msg.key.id, body, now());
+      bumpStat(db, jid, 'messages'); // message-volume counter for /stats
 
       // Per-group verification. Known uniqname allowed here -> silent admit.
       let verified = verifiedHere(jid, phone);
