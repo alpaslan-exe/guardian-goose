@@ -21,7 +21,7 @@ import { openDb } from './db.js';
 import { screen, uniqnameAllowedInGroup, tryAutoAdmit } from './screening.js';
 import { inspect } from './behavior.js';
 import { handleDM, setSession, clearSession, ADMIN_WELCOME } from './commands.js';
-import { removeMember, logAction, isBanned, pruneArchive, autoBansLast24hInGroup, isAdminLive, recordLid, recordContact, isContacted, addrFor, addrForId, jid2phone } from './actions.js';
+import { removeMember, logAction, isBanned, pruneArchive, autoBansLast24hInGroup, isAdminLive, recordLid, recordContact, isContacted, archiveMessage, addrFor, addrForId, jid2phone } from './actions.js';
 import { normalizePhone } from './security.js';
 import { installOutbox } from './outbox.js';
 import { bumpStat, snapshotMembers } from './stats.js';
@@ -454,8 +454,10 @@ async function start() {
         if (known && uniqnameAllowedInGroup(db, jid, known)) { markVerified(jid, phone, known); verified = true; }
       }
 
-      // Revoke THIS message for everyone (sender addressed by their exact in-group id).
+      // Revoke THIS message for everyone (sender addressed by their exact in-group id). Archive
+      // it first so any deleted message (spam revoke, hold-mute) stays reviewable via /messages.
       const revoke = async () => {
+        archiveMessage(db, jid, phone, msg.key.id, body, now());
         await sock.sendMessage(jid, { delete: { remoteJid: jid, id: msg.key.id, participant: senderId, fromMe: false } }).catch(() => {});
         db.prepare('DELETE FROM msg_index WHERE gid=? AND msg_id=?').run(jid, msg.key.id);
       };

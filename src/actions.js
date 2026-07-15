@@ -102,6 +102,14 @@ function archiveUserMessages(db, gid, phone) {
               (SELECT msg_id FROM msg_archive WHERE gid=? AND phone=? ORDER BY ts DESC LIMIT ?)`)
     .run(gid, phone, gid, phone, ARCHIVE_MAX);
 }
+// Archive a SINGLE message (any deletion the bot makes — spam revoke, hold-mute — so admins can
+// review it later, not just bans), then trim to the last ARCHIVE_MAX for that (gid,phone).
+export function archiveMessage(db, gid, phone, msgId, body, ts) {
+  db.prepare('INSERT OR IGNORE INTO msg_archive (gid,phone,msg_id,body,ts) VALUES (?,?,?,?,?)').run(gid, phone, msgId, body, ts);
+  db.prepare(`DELETE FROM msg_archive WHERE gid=? AND phone=? AND msg_id NOT IN
+              (SELECT msg_id FROM msg_archive WHERE gid=? AND phone=? ORDER BY ts DESC LIMIT ?)`)
+    .run(gid, phone, gid, phone, ARCHIVE_MAX);
+}
 export const fetchArchive = (db, gid, phone, limit = ARCHIVE_MAX) =>
   db.prepare('SELECT body,ts FROM msg_archive WHERE gid=? AND phone=? ORDER BY ts DESC LIMIT ?')
     .all(gid, phone, Math.min(limit, ARCHIVE_MAX));
