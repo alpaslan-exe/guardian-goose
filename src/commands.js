@@ -15,7 +15,7 @@ import { removeMember, unbanMember, fetchArchive, logAction, isAdminLive, addrFo
 import { uniqnameAllowedInGroup } from './screening.js';
 import { notifyAdmins } from './notify.js';
 import { clean, tokens, validUniqname, validPhone, normalizePhone, oneOf, extractUniqnames } from './security.js';
-import { resolvePeriod, aggregate, buildCharts, renderChart } from './stats.js';
+import { resolvePeriod, aggregate, buildCharts, renderChart, memberCountAt } from './stats.js';
 
 const MASS_BAN_LIMIT = 10; // bans per admin per 24h before typed approval is required
 
@@ -61,6 +61,7 @@ handled separately — if you run several, I'll ask which one(s) each action is 
 
 *Commands* (DM me):
 /policy               set a group's policy
+/grace <hours>        strict-policy grace window before removal (per group)
 /allow add|remove <uniqname> | list | enforce on|off   per-group approved uniqnames
 /allow bulk           paste a whole roster of uniqnames to auto-approve
 /associate <phone> <uniqname>   bind a uniqname to a number + verify them
@@ -71,6 +72,7 @@ handled separately — if you run several, I'll ask which one(s) each action is 
 /lookup <uniqname|phone|lid>   flexible; finds across all records
 /stats [period]       charts: members, message volume, actions
                       period: all | ytd | week | month | year | YYYY | YYYY-MM
+/membercount [date]   current member count, or the count on a YYYY-MM-DD
 /notif                your alert level (all | kicks | none)
 /logs [n]             recent actions
 /help                 show this again
@@ -167,8 +169,19 @@ export async function handleDM(sock, db, cfg, senderPhone, rawText, senderLid = 
       // period: all | ytd | week | month | year | YYYY | YYYY-MM  (default: last 30 days)
       return startScoped(sock, db, senderPhone, groups, { cmd: 'stats', period: tk[1] || 'month' });
     }
+    case '/membercount': {
+      if (!isAdmin) return notAdmin();
+      // optional YYYY-MM-DD -> count at that date; otherwise the current count
+      return startScoped(sock, db, senderPhone, groups, { cmd: 'membercount', date: /^\d{4}-\d{2}-\d{2}$/.test(tk[1] || '') ? tk[1] : null });
+    }
     case '/policy':
       return isAdmin ? startScoped(sock, db, senderPhone, groups, { cmd: 'policy' }) : notAdmin();
+    case '/grace': {
+      if (!isAdmin) return notAdmin();
+      const h = parseInt(tk[1], 10);
+      if (!Number.isInteger(h) || h < 1 || h > 720) return (await send(sock, senderPhone, 'Usage: /grace <hours 1-720> (strict-policy grace window)'), true);
+      return startScoped(sock, db, senderPhone, groups, { cmd: 'grace', hours: h });
+    }
     case '/notif':
       return isAdmin ? startScoped(sock, db, senderPhone, groups, { cmd: 'notif' }) : notAdmin();
 
@@ -298,6 +311,8 @@ function scopedVerb(p) {
   if (p.cmd === 'unban') return `Unban ${p.target} in`;
   if (p.cmd === 'messages') return `Fetch ${p.target}'s messages from`;
   if (p.cmd === 'stats') return `Show ${p.period} stats for`;
+  if (p.cmd === 'membercount') return `Member count${p.date ? ` on ${p.date}` : ''} for`;
+  if (p.cmd === 'grace') return `Set strict grace to ${p.hours}h for`;
   if (p.cmd === 'associate') return `Associate ${p.target} ↔ ${p.uniqname} (verify) in`;
   if (p.cmd === 'allow') return `Apply /allow ${p.sub}${p.uniqname ? ' ' + p.uniqname : p.value ? ' ' + p.value : ''} to`;
   return `Apply /${p.cmd} to`;
@@ -434,6 +449,17 @@ async function execute(sock, db, phone, p, gids) {
       logAction(db, { gid, actor: phone, action: 'verify', target: p.target, reason: `associated ${p.uniqname}` });
     }
     return send(sock, phone, `Associated ${p.target} ↔ ${p.uniqname}; verified in ${ok.length} group(s).`);
+  }
+  if (p.cmd === 'grace') {
+    for (const gid of ok) { db.prepare('UPDATE groups SET grace_hours=? WHERE gid=?').run(p.hours, gid); logAction(db, { gid, actor: phone, action: 'setting', target: '', reason: `grace=${p.hours}h` }); }
+    return send(sock, phone, `Strict grace period set to ${p.hours}h for ${ok.length} group(s).`);
+  }
+  if (p.cmd === 'membercount') {
+    const countFor = (g) => p.date ? memberCountAt(db, g, p.date)
+      : (db.prepare('SELECT member_count FROM groups WHERE gid=?').get(g)?.member_count ?? 0);
+    const lines = ok.map((g) => `${nameOf(db, g)}: ${countFor(g)}`);
+    const total = ok.reduce((s, g) => s + countFor(g), 0);
+    return send(sock, phone, `👥 Members${p.date ? ` as of ${p.date}` : ' (now)'}:\n${lines.join('\n')}${ok.length > 1 ? `\n*Total: ${total}*` : ''}`);
   }
   if (p.cmd === 'stats') {
     const period = resolvePeriod(p.period);

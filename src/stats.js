@@ -39,6 +39,17 @@ export function bumpStat(db, gid, field, n = 1) {
               ON CONFLICT(gid,day) DO UPDATE SET ${field}=${field}+excluded.${field}`).run(gid, dayKey(Date.now() / 1000), n);
 }
 
+// Record a group's current member count: update the group row and today's snapshot.
+export function snapshotMembers(db, gid, count) {
+  db.prepare('UPDATE groups SET member_count=? WHERE gid=?').run(count, gid);
+  db.prepare(`INSERT INTO member_snapshots (gid,day,count) VALUES (?,?,?)
+              ON CONFLICT(gid,day) DO UPDATE SET count=excluded.count`).run(gid, dayKey(Date.now() / 1000), count);
+}
+// Member count for a group as of a given day (most recent snapshot on/before it; 0 if none yet).
+export function memberCountAt(db, gid, day) {
+  return db.prepare('SELECT count FROM member_snapshots WHERE gid=? AND day<=? ORDER BY day DESC LIMIT 1').get(gid, day)?.count ?? 0;
+}
+
 // Turn a period token into a concrete window. Supports: all | ytd | week | month |
 // year | YYYY | YYYY-MM (default: last 30 days).
 export function resolvePeriod(token) {
@@ -97,12 +108,20 @@ export function aggregate(db, gids, period) {
     if (actions[r.action]) actions[r.action][b] += 1;
   }
 
-  return { labels, joins, leaves, messages, actions,
+  // Actual member count per bucket = summed group snapshot as of the bucket's end (baseline
+  // captured at bot-join carries forward), so the line reflects real size, not net-from-zero.
+  const members = labels.map((lab) => {
+    const day = period.bucket === 'day' ? lab : endOfMonth(lab);
+    return gids.reduce((s, g) => s + memberCountAt(db, g, day), 0);
+  });
+
+  return { labels, joins, leaves, messages, actions, members,
     totals: {
       joins: joins.reduce((a, b) => a + b, 0),
       leaves: leaves.reduce((a, b) => a + b, 0),
       messages: messages.reduce((a, b) => a + b, 0),
       actions: Object.values(actions).reduce((s, arr) => s + arr.reduce((a, b) => a + b, 0), 0),
+      members: members.length ? members[members.length - 1] : 0,
     } };
 }
 
@@ -116,10 +135,11 @@ export function buildCharts(agg, title) {
       datasets: [
         { label: 'Joins', backgroundColor: '#34a853', data: agg.joins },
         { label: 'Leaves', backgroundColor: '#ea4335', data: agg.leaves.map((v) => -v) },
-        { label: 'Net', type: 'line', borderColor: '#1a3d7c', backgroundColor: '#1a3d7c', fill: false, data: agg.joins.map((v, i) => v - agg.leaves[i]) },
+        { label: 'Members', type: 'line', borderColor: '#1a3d7c', backgroundColor: '#1a3d7c', fill: false, yAxisID: 'y2', data: agg.members },
       ],
     },
-    options: { ...base, title: { display: true, text: `${title} — Membership (${agg.totals.joins} joins / ${agg.totals.leaves} leaves)` } },
+    options: { ...base, title: { display: true, text: `${title} — Membership (${agg.totals.members} members; +${agg.totals.joins}/-${agg.totals.leaves})` },
+      scales: { ...base.scales, y2: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false } } } },
   };
   const messages = {
     type: 'line',

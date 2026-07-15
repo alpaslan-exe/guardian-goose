@@ -24,7 +24,7 @@ import { handleDM, setSession, clearSession, ADMIN_WELCOME } from './commands.js
 import { removeMember, logAction, isBanned, pruneArchive, autoBansLast24hInGroup, isAdminLive, recordLid, recordContact, isContacted, addrFor, addrForId, jid2phone } from './actions.js';
 import { normalizePhone } from './security.js';
 import { installOutbox } from './outbox.js';
-import { bumpStat } from './stats.js';
+import { bumpStat, snapshotMembers } from './stats.js';
 
 const AUTO_BAN_CAP = 10; // max bot-initiated bans per group per 24h; beyond -> flag only
 // Start of "today" in the process timezone (systemd sets TZ=America/Detroit) — DST-correct.
@@ -81,6 +81,8 @@ function textOf(msg) {
                m.imageMessage?.caption || m.videoMessage?.caption || '');
 }
 const groupPolicy = (gid) => db.prepare('SELECT policy FROM groups WHERE gid=?').get(gid)?.policy || cfg.defaultPolicy;
+// Per-group strict grace window (hours); falls back to the config default when unset.
+const groupGrace = (gid) => db.prepare('SELECT grace_hours FROM groups WHERE gid=?').get(gid)?.grace_hours ?? cfg.graceHours;
 const groupName = (gid) => db.prepare('SELECT name FROM groups WHERE gid=?').get(gid)?.name || gid;
 const verifiedHere = (gid, phone) => !!db.prepare('SELECT 1 FROM membership WHERE gid=? AND phone=? AND verified=1').get(gid, phone);
 // Trusted = verified OR grandfathered (already in the group when the bot arrived). Trusted
@@ -96,6 +98,7 @@ async function syncGroup(sock, gid) {
   const existed = db.prepare('SELECT 1 FROM groups WHERE gid=?').get(gid);
   db.prepare(`INSERT INTO groups (gid,name,policy) VALUES (?,?,?) ON CONFLICT(gid) DO UPDATE SET name=excluded.name`)
     .run(gid, meta.subject, cfg.defaultPolicy);
+  snapshotMembers(db, gid, meta.participants.length); // refresh current count + today's snapshot (baseline at join)
   const liveAdmins = meta.participants.filter((p) => p.admin === 'admin' || p.admin === 'superadmin').map((p) => jid2phone(p.id));
   const known = db.prepare('SELECT admin_phone FROM admin_group WHERE gid=?').all(gid).map((r) => r.admin_phone);
   for (const k of known) if (!liveAdmins.includes(k)) db.prepare('DELETE FROM admin_group WHERE gid=? AND admin_phone=?').run(gid, k);
@@ -200,7 +203,7 @@ async function onJoin(sock, gid, lid, phone) {
   // (no per-joiner posts, no per-joiner DMs) so a busy group can't trigger a spam-flag.
   if (!cfg.welcomeOnJoin) return;
   const extra = policy === 'hold' ? ' Until you do, your messages here are removed.'
-              : policy === 'strict' ? ` You have ${cfg.graceHours}h or you'll be removed.` : '';
+              : policy === 'strict' ? ` You have ${groupGrace(gid)}h or you'll be removed.` : '';
   const mentions = [...new Set([phone ? `${phone}@s.whatsapp.net` : null, `${key}@lid`].filter(Boolean))];
   const tag = phone ? `@${phone}` : `@${key}`;
   await postWelcome(sock, gid, tag, mentions, extra);
@@ -209,15 +212,17 @@ async function onJoin(sock, gid, lid, phone) {
 // strict-policy grace kick: remove members unverified IN THAT GROUP past graceHours. NOT a ban.
 // Never touches admins (cached skip here + live fail-closed guard inside removeMember).
 async function graceSweep(sock) {
-  const cutoff = now() - cfg.graceHours * 3600;
-  const rows = db.prepare(`SELECT m.gid, m.phone FROM membership m JOIN groups g ON g.gid=m.gid
-                           WHERE g.policy='strict' AND m.joined_ts < ? AND m.verified=0 AND m.pretrusted=0`).all(cutoff);
-  for (const r of rows) {
-    if (db.prepare('SELECT 1 FROM admin_group WHERE gid=? AND admin_phone=?').get(r.gid, r.phone)) continue;
-    const deleted = await removeMember(sock, db, r.gid, r.phone, 'bot', 'strict: unverified past grace');
-    if (deleted === -1) continue; // protected — refused
-    clearSession(db, r.phone);
-    await notifyAdmins(sock, db, r.gid, 'remove', `auto-removed ${r.phone} — unverified after ${cfg.graceHours}h (strict); deleted ${deleted} msg(s)`);
+  // Each strict group uses its own grace window (per-group grace_hours, else the config default).
+  for (const g of db.prepare(`SELECT gid, COALESCE(grace_hours,?) gh FROM groups WHERE policy='strict'`).all(cfg.graceHours)) {
+    const cutoff = now() - g.gh * 3600;
+    const rows = db.prepare(`SELECT phone FROM membership WHERE gid=? AND joined_ts<? AND verified=0 AND pretrusted=0`).all(g.gid, cutoff);
+    for (const r of rows) {
+      if (db.prepare('SELECT 1 FROM admin_group WHERE gid=? AND admin_phone=?').get(g.gid, r.phone)) continue;
+      const deleted = await removeMember(sock, db, g.gid, r.phone, 'bot', 'strict: unverified past grace');
+      if (deleted === -1) continue; // protected — refused
+      clearSession(db, r.phone);
+      await notifyAdmins(sock, db, g.gid, 'remove', `auto-removed ${r.phone} — unverified after ${g.gh}h (strict); deleted ${deleted} msg(s)`);
+    }
   }
 }
 

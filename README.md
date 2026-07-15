@@ -122,6 +122,8 @@ admin, and ask which group(s) to act on when the admin runs several.
 |---------|-------------|
 | `/help` | Show the command guide. |
 | `/policy` | Set a group's policy. |
+| `/grace <hours>` | Strict-policy grace window before removal (per group). |
+| `/membercount [date]` | Current member count, or the count on a `YYYY-MM-DD`. |
 | `/allow add\|remove <uniqname>` | Manage a group's approved-uniqname list. |
 | `/allow bulk` | Paste a roster of uniqnames to auto-approve. |
 | `/allow list \| enforce on\|off` | List the allowlist / require it for verification. |

@@ -30,8 +30,19 @@ export function openDb(path) {
     CREATE TABLE IF NOT EXISTS groups (
       gid              TEXT PRIMARY KEY,  -- WhatsApp group jid
       name             TEXT,
-      policy           TEXT DEFAULT 'chill', -- 'chill' | 'hold' | 'strict' (PER GROUP)
-      enforce_allowlist INTEGER DEFAULT 0    -- PER GROUP: require uniqname on this group's allowlist
+      policy           TEXT DEFAULT 'chill', -- 'chill' | 'hold' | 'strict' | 'off' (PER GROUP)
+      enforce_allowlist INTEGER DEFAULT 0,   -- PER GROUP: require uniqname on this group's allowlist
+      member_count     INTEGER DEFAULT 0,    -- current participant count, refreshed on each sync
+      grace_hours      INTEGER               -- PER GROUP strict grace window; NULL = use config default
+    );
+
+    -- Daily snapshot of each group's total member count (baseline stats + /membercount at a point
+    -- in time). First recorded when the bot joins the group.
+    CREATE TABLE IF NOT EXISTS member_snapshots (
+      gid   TEXT,
+      day   TEXT,                          -- 'YYYY-MM-DD' in the display timezone
+      count INTEGER,
+      PRIMARY KEY (gid, day)
     );
 
     -- Pre-approved uniqnames, PER GROUP. If enforce_allowlist and this group has entries,
@@ -151,5 +162,7 @@ export function openDb(path) {
   `);
   // Migrations for DBs created before a column existed (ALTER fails silently if present).
   try { db.exec('ALTER TABLE membership ADD COLUMN pretrusted INTEGER DEFAULT 0'); } catch {}
+  try { db.exec('ALTER TABLE groups ADD COLUMN member_count INTEGER DEFAULT 0'); } catch {}
+  try { db.exec('ALTER TABLE groups ADD COLUMN grace_hours INTEGER'); } catch {}
   return db;
 }
