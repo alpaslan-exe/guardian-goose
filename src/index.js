@@ -148,16 +148,26 @@ async function postWelcome(sock, gid, tag, mentionJids, extra) {
   const b = welcomeBatch.get(gid);
   const render = (entries) =>
     `🪿 Welcome ${entries.map((e) => e.tag).join(' ')}! DM me your *uniqname* to verify.${extra}`;
+
+  // Inside the edit window: fold the new joiner into the existing message.
   if (b && t - b.ts < WELCOME_EDIT_WINDOW && b.entries.length < 40) {
     b.entries.push({ tag, mentions: mentionJids });
     const mentions = [...new Set(b.entries.flatMap((e) => e.mentions))];
-    await sock.sendMessage(gid, { text: render(b.entries), edit: b.key, mentions }).catch(() => {});
+    const text = render(b.entries);
+    await sock.sendMessage(gid, { text, edit: b.key, mentions }).catch(() => {});
+    b.lastText = text;
     return;
   }
-  if (!newWelcomeAllowed(gid)) return; // over the per-hour cap for new posts
+
+  // Past the edit window: REPLY to the previous welcome and @ the newcomer (don't let it pass).
+  // That reply becomes the new batch, editable for its own window, so replies chain rather than
+  // scattering standalone posts. Only the very first welcome is subject to the per-hour cap.
   const entries = [{ tag, mentions: mentionJids }];
-  const sent = await sock.sendMessage(gid, { text: render(entries), mentions: mentionJids }).catch(() => null);
-  if (sent?.key) welcomeBatch.set(gid, { key: sent.key, entries, ts: t });
+  const text = render(entries);
+  const opts = b ? { quoted: { key: b.key, message: { conversation: b.lastText || 'Welcome' } } } : {};
+  if (!b && !newWelcomeAllowed(gid)) return;
+  const sent = await sock.sendMessage(gid, { text, mentions: mentionJids }, opts).catch(() => null);
+  if (sent?.key) welcomeBatch.set(gid, { key: sent.key, entries, ts: t, lastText: text });
 }
 
 // A joiner is keyed by their LID (matches grandfather snapshot + message handler). `phone`
@@ -313,7 +323,9 @@ async function start() {
       // (device actually unlinked / banned) means the creds are dead — reconnecting with them
       // just 401-loops forever. After 2 consecutive logouts with no successful 'open', clear
       // auth_state so the next start() requests a FRESH pairing code (auto re-pair path).
-      if (loggedOut && reconnectAttempts >= 2 && cfg.pairNumber) {
+      // Only clear a PREVIOUSLY-REGISTERED session. During initial pairing (never registered)
+      // clearing just rotates the pairing code and prevents linking, so leave it alone.
+      if (loggedOut && reconnectAttempts >= 2 && cfg.pairNumber && state.creds.registered) {
         console.log('persistent logout — clearing auth_state to force re-pair.');
         try { rmSync(cfg.authDir, { recursive: true, force: true }); } catch {}
         sendAlert(cfg, 'Guardian Goose LOGGED OUT — re-pair needed',
