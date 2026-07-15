@@ -22,7 +22,11 @@ export function installOutbox(sock, { minGapMs = 2500, jitterMs = 2500, dailyCap
   let daySent = 0;
   let dayStart = Date.now();
 
-  // Drain the queue one message at a time, pausing minGapMs+jitter between sends.
+  // A message (text/image) shows a typing indicator first; a delete/receipt does not.
+  const isMessage = (content) => !!(content && (content.text != null || content.image != null || content.caption != null));
+
+  // Drain the queue one message at a time. For each real message: show "typing…", pause a
+  // human-like moment, send, then clear typing — then wait minGapMs+jitter before the next.
   async function pump() {
     if (running) return;
     running = true;
@@ -30,8 +34,15 @@ export function installOutbox(sock, { minGapMs = 2500, jitterMs = 2500, dailyCap
       if (Date.now() - dayStart > 86_400_000) { daySent = 0; dayStart = Date.now(); } // roll the 24h window
       const job = queue.shift();
       if (daySent >= dailyCap) { job.reject(new Error('daily send cap reached')); continue; }
+      const typing = isMessage(job.content);
+      if (typing) {
+        try { await sock.sendPresenceUpdate('composing', job.jid); } catch {}
+        const len = (job.content.text || job.content.caption || '').length;
+        await sleep(Math.min(1200 + len * 40, 6000)); // "typing" time scales with message length
+      }
       try { const res = await raw(job.jid, job.content, job.options); daySent++; job.resolve(res); }
       catch (e) { job.reject(e); }
+      if (typing) { try { await sock.sendPresenceUpdate('paused', job.jid); } catch {} }
       await sleep(minGapMs + Math.floor(Math.random() * jitterMs));
     }
     running = false;

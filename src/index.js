@@ -290,6 +290,7 @@ async function start() {
       downAlerted = false;
       connected = true;
       stampConnected();
+      sock.sendPresenceUpdate('available').catch(() => {}); // online presence so typing indicators show
       const n = await syncAllGroups(sock);
       console.log('connected. groups:', n);
       if (!watchdogTimer) watchdogTimer = setInterval(watchdog, 5 * 60 * 1000);
@@ -384,6 +385,7 @@ async function start() {
       const phone = isGroup ? (senderLid || jid2phone(senderId)) : (altPhone || jid2phone(senderId));
 
       if (!isGroup) {
+        await sock.readMessages([msg.key]).catch(() => {}); // send a read receipt, then reply
         // A DM to the bot establishes contact, so it may reply / notify this id later.
         recordContact(db, phone); recordContact(db, senderLid);
         await handleDM(sock, db, cfg, phone, body, senderLid);
